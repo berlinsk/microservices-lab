@@ -1,0 +1,28 @@
+services:
+  provider:
+    build:
+      context: ./provider-service
+      dockerfile: Dockerfile
+    container_name: provider-service
+    ports:
+      - "8081:8081"
+    networks:
+      - lab1-network
+
+  consumer:
+    build:
+      context: ./consumer-service
+      dockerfile: Dockerfile
+    container_name: consumer-service
+    ports:
+      - "8080:8080"
+    environment:
+      - PROVIDER_URL=http://provider:8081
+    depends_on:
+      - provider
+    networks:
+      - lab1-network
+
+networks:
+  lab1-network:
+    driver: bridge
