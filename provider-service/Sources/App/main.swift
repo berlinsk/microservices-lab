@@ -1,3 +1,4 @@
+// л.р. 1.2
 import Vapor
 import Foundation
 
@@ -15,6 +16,7 @@ struct ComputationResponse: Content {
     let providerId: String
 }
 
+// л.р. 2.1
 struct BrokerTask: Content, Codable {
     let id: String
     let operation: String
@@ -32,6 +34,7 @@ struct TaskResult: Content, Codable {
     let completedAt: String
 }
 
+// л.р. 1.3
 struct ComputationLog: Content {
     let requestId: String
     let operation: String
@@ -42,6 +45,8 @@ struct ComputationLog: Content {
     let providerId: String
 }
 
+// л.р. 1.2
+//*
 struct ComputationService {
     
     static func factorial(_ n: Int) -> String {
@@ -93,28 +98,52 @@ struct ComputationService {
         return (result, timeMs)
     }
 }
+//*
 
-actor ComputationLogger {
+// л.р. 1.3
+//*
+final class ComputationLogger: @unchecked Sendable {
     static let shared = ComputationLogger()
     private var logs: [ComputationLog] = []
+    private let lock = NSLock()
     
     func log(_ entry: ComputationLog) {
+        lock.lock()
+        defer { lock.unlock() }
         logs.append(entry)
         print("Log [\(entry.mode)]: \(entry.operation)(\(entry.input)) in \(String(format: "%.3f", entry.computationTimeMs)) ms")
     }
     
-    func getLogs() -> [ComputationLog] { return logs }
-    func clearLogs() { logs.removeAll() }
+    func getLogs() -> [ComputationLog] {
+        lock.lock()
+        defer { lock.unlock() }
+        return logs
+    }
+    
+    func clearLogs() {
+        lock.lock()
+        defer { lock.unlock() }
+        logs.removeAll()
+    }
 }
+//*
 
 let providerId = Environment.get("PROVIDER_ID") ?? "provider-1"
 let brokerURL = Environment.get("BROKER_URL") ?? "http://broker:8082"
+let eventStoreURL = Environment.get("EVENT_STORE_URL") ?? "http://event-store:8083"
 
-actor BrokerWorker {
+// л.р. 3-4.3
+func publishEventAsync(client: Client, streamId: String, eventType: String, data: [String: String]) {
+}
+
+// л.р. 2.4
+//*
+final class BrokerWorker: @unchecked Sendable {
     private var isRunning = false
     private let client: Client
     private let providerId: String
     private let brokerURL: String
+    private let lock = NSLock()
     
     init(client: Client, providerId: String, brokerURL: String) {
         self.client = client
@@ -123,8 +152,14 @@ actor BrokerWorker {
     }
     
     func start() async {
-        guard !isRunning else { return }
+        lock.lock()
+        guard !isRunning else {
+            lock.unlock()
+            return
+        }
         isRunning = true
+        lock.unlock()
+        
         print("Broker worker started, polling \(brokerURL)")
         
         while isRunning {
@@ -134,7 +169,9 @@ actor BrokerWorker {
     }
     
     func stop() {
+        lock.lock()
         isRunning = false
+        lock.unlock()
     }
     
     private func pollAndProcess() async {
@@ -146,6 +183,12 @@ actor BrokerWorker {
             let task = try response.content.decode(BrokerTask.self)
             print("Processing task: \(task.id) - \(task.operation)(\(task.value))")
             
+            // л.р. 3-4.3
+            publishEventAsync(client: client, streamId: task.id, eventType: "TaskStarted", data: [
+                "taskId": task.id, "providerId": providerId
+            ])
+            
+            // л.р. 1.3, 2.2
             let (result, timeMs) = ComputationService.compute(operation: task.operation, value: task.value)
             
             let formatter = ISO8601DateFormatter()
@@ -168,7 +211,15 @@ actor BrokerWorker {
                 mode: "async",
                 providerId: providerId
             )
-            await ComputationLogger.shared.log(logEntry)
+            ComputationLogger.shared.log(logEntry)
+            
+            // л.р. 3-4.3
+            publishEventAsync(client: client, streamId: task.id, eventType: "TaskCompleted", data: [
+                "taskId": task.id,
+                "result": result,
+                "computationTimeMs": String(timeMs),
+                "providerId": providerId
+            ])
             
             _ = try await client.post(URI(string: "\(brokerURL)/results")) { req in
                 try req.content.encode(taskResult)
@@ -179,6 +230,7 @@ actor BrokerWorker {
         }
     }
 }
+//*
 
 var brokerWorker: BrokerWorker?
 
@@ -195,13 +247,17 @@ func routes(_ app: Application) throws {
         return "Provider Service (\(providerId)) is healthy"
     }
     
+    // л.р. 1.1, 1.2
     app.post("compute") { req async throws -> ComputationResponse in
         let request = try req.content.decode(ComputationRequest.self)
+        
+        // л.р. 1.3
         let (result, timeMs) = ComputationService.compute(operation: request.operation, value: request.value)
         
         let formatter = ISO8601DateFormatter()
         let timestamp = formatter.string(from: Date())
         
+        // л.р. 1.3
         let logEntry = ComputationLog(
             requestId: UUID().uuidString,
             operation: request.operation,
@@ -211,7 +267,7 @@ func routes(_ app: Application) throws {
             mode: "sync",
             providerId: providerId
         )
-        await ComputationLogger.shared.log(logEntry)
+        ComputationLogger.shared.log(logEntry)
         
         return ComputationResponse(
             operation: request.operation,
@@ -223,12 +279,13 @@ func routes(_ app: Application) throws {
         )
     }
     
-    app.get("logs") { req async -> [ComputationLog] in
-        return await ComputationLogger.shared.getLogs()
+    // л.р. 1.3
+    app.get("logs") { req -> [ComputationLog] in
+        return ComputationLogger.shared.getLogs()
     }
     
-    app.delete("logs") { req async -> String in
-        await ComputationLogger.shared.clearLogs()
+    app.delete("logs") { req -> String in
+        ComputationLogger.shared.clearLogs()
         return "Logs cleared"
     }
 }
@@ -240,6 +297,7 @@ try configure(app)
 
 print("Provider Service (\(providerId)) started on port 8081")
 
+// л.р. 2.4
 Task {
     try? await Task.sleep(nanoseconds: 2_000_000_000)
     brokerWorker = BrokerWorker(client: app.client, providerId: providerId, brokerURL: brokerURL)

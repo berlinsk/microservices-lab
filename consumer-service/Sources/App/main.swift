@@ -1,3 +1,4 @@
+// л.р. 1.1
 import Vapor
 import Foundation
 
@@ -15,6 +16,7 @@ struct ComputationResponse: Content {
     let providerId: String
 }
 
+// л.р. 2.1
 struct BrokerTask: Content, Codable {
     let id: String
     let operation: String
@@ -48,6 +50,7 @@ struct ConsumerResponse: Content {
     let providerId: String
 }
 
+// л.р. 1.4
 struct RequestLog: Content {
     let requestId: String
     let operation: String
@@ -61,19 +64,37 @@ struct RequestLog: Content {
     let success: Bool
 }
 
-actor RequestLogger {
+// л.р. 1.4, 2.3
+//*
+final class RequestLogger: @unchecked Sendable {
     static let shared = RequestLogger()
     private var logs: [RequestLog] = []
+    private let lock = NSLock()
     
     func log(_ entry: RequestLog) {
+        lock.lock()
+        defer { lock.unlock() }
         logs.append(entry)
         print("Log [\(entry.mode)]: \(entry.operation)(\(entry.input)) - total: \(String(format: "%.3f", entry.totalTimeMs)) ms, compute: \(String(format: "%.3f", entry.computationTimeMs)) ms, by \(entry.providerId)")
     }
     
-    func getLogs() -> [RequestLog] { return logs }
-    func clearLogs() { logs.removeAll() }
+    func getLogs() -> [RequestLog] {
+        lock.lock()
+        defer { lock.unlock() }
+        return logs
+    }
     
+    func clearLogs() {
+        lock.lock()
+        defer { lock.unlock() }
+        logs.removeAll()
+    }
+    
+    // л.р. 2.5
     func getStatistics() -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
+        
         guard !logs.isEmpty else { return ["message": "No logs available"] }
         
         let syncLogs = logs.filter { $0.mode == "sync" && $0.success }
@@ -102,10 +123,18 @@ actor RequestLogger {
         ]
     }
 }
+//*
 
 let providerURL = Environment.get("PROVIDER_URL") ?? "http://localhost:8081"
 let brokerURL = Environment.get("BROKER_URL") ?? "http://broker:8082"
+let eventStoreURL = Environment.get("EVENT_STORE_URL") ?? "http://event-store:8083"
 
+// л.р. 3-4.3
+func publishEventAsync(client: Client, streamId: String, eventType: String, data: [String: String]) {
+}
+
+// л.р. 1.1
+//*
 struct ProviderClient {
     let client: Client
     
@@ -129,7 +158,10 @@ struct ProviderClient {
         return (computationResponse, requestTimeMs)
     }
 }
+//*
 
+// л.р. 2.1
+//*
 struct BrokerClient {
     let client: Client
     
@@ -179,7 +211,9 @@ struct BrokerClient {
         }
     }
 }
+//*
 
+// л.р. 1.1
 struct TaskGenerator {
     static let operations = ["factorial", "fibonacci", "prime", "sum"]
     
@@ -217,16 +251,19 @@ func routes(_ app: Application) throws {
         return "Consumer Service - POST /compute (sync), POST /compute-async (async), POST /batch, POST /compare, GET /statistics"
     }
     
+    // л.р. 1.1
     app.post("compute") { req async throws -> ConsumerResponse in
         let taskRequest = try req.content.decode(TaskRequest.self)
         let operation = taskRequest.operation ?? "factorial"
         let value = taskRequest.value ?? 10
         
         let client = ProviderClient(client: req.client)
+        // л.р. 1.4
         let (response, requestTimeMs) = try await client.compute(operation: operation, value: value)
         let networkOverhead = requestTimeMs - response.computationTimeMs
         
         let formatter = ISO8601DateFormatter()
+        // л.р. 1.4
         let logEntry = RequestLog(
             requestId: UUID().uuidString,
             operation: operation,
@@ -239,7 +276,7 @@ func routes(_ app: Application) throws {
             providerId: response.providerId,
             success: true
         )
-        await RequestLogger.shared.log(logEntry)
+        RequestLogger.shared.log(logEntry)
         
         return ConsumerResponse(
             operation: response.operation,
@@ -253,6 +290,7 @@ func routes(_ app: Application) throws {
         )
     }
     
+    // л.р. 2.1
     app.post("compute-async") { req async throws -> ConsumerResponse in
         let taskRequest = try req.content.decode(TaskRequest.self)
         let operation = taskRequest.operation ?? "factorial"
@@ -262,11 +300,21 @@ func routes(_ app: Application) throws {
         let startTime = DispatchTime.now()
         
         let taskId = try await client.submitTask(operation: operation, value: value)
+        
+        // л.р. 3-4.3
+        publishEventAsync(client: req.client, streamId: taskId, eventType: "TaskCreated", data: [
+            "taskId": taskId,
+            "operation": operation,
+            "value": String(value)
+        ])
+        
+        // л.р. 2.3
         let (result, totalTimeMs) = try await client.getResult(taskId: taskId)
         
         let networkOverhead = totalTimeMs - result.computationTimeMs
         
         let formatter = ISO8601DateFormatter()
+        // л.р. 2.3
         let logEntry = RequestLog(
             requestId: taskId,
             operation: operation,
@@ -279,7 +327,7 @@ func routes(_ app: Application) throws {
             providerId: result.providerId,
             success: true
         )
-        await RequestLogger.shared.log(logEntry)
+        RequestLogger.shared.log(logEntry)
         
         return ConsumerResponse(
             operation: result.operation,
@@ -293,6 +341,7 @@ func routes(_ app: Application) throws {
         )
     }
     
+    // л.р. 1.1
     app.post("generate") { req async throws -> ConsumerResponse in
         let taskRequest = try? req.content.decode(TaskRequest.self)
         let (operation, value) = TaskGenerator.generateTask(operation: taskRequest?.operation, value: taskRequest?.value)
@@ -314,7 +363,7 @@ func routes(_ app: Application) throws {
             providerId: response.providerId,
             success: true
         )
-        await RequestLogger.shared.log(logEntry)
+        RequestLogger.shared.log(logEntry)
         
         return ConsumerResponse(
             operation: response.operation,
@@ -328,6 +377,8 @@ func routes(_ app: Application) throws {
         )
     }
     
+    // л.р. 2.4
+    //*
     app.post("batch") { req async throws -> Response in
         struct BatchRequest: Content {
             let count: Int
@@ -350,6 +401,11 @@ func routes(_ app: Application) throws {
                 let (operation, value) = TaskGenerator.generateTask(operation: batchRequest.operation)
                 let taskId = try await brokerClient.submitTask(operation: operation, value: value)
                 taskIds.append((taskId, operation, value))
+                
+                // л.р. 3-4.3
+                publishEventAsync(client: req.client, streamId: taskId, eventType: "TaskCreated", data: [
+                    "taskId": taskId, "operation": operation, "value": String(value)
+                ])
             }
             
             for (index, (taskId, operation, value)) in taskIds.enumerated() {
@@ -369,7 +425,7 @@ func routes(_ app: Application) throws {
                         providerId: result.providerId,
                         success: true
                     )
-                    await RequestLogger.shared.log(logEntry)
+                    RequestLogger.shared.log(logEntry)
                     
                     results.append([
                         "index": index + 1,
@@ -416,7 +472,7 @@ func routes(_ app: Application) throws {
                         providerId: response.providerId,
                         success: true
                     )
-                    await RequestLogger.shared.log(logEntry)
+                    RequestLogger.shared.log(logEntry)
                     
                     results.append([
                         "index": i,
@@ -448,7 +504,10 @@ func routes(_ app: Application) throws {
         headers.add(name: .contentType, value: "application/json")
         return Response(status: .ok, headers: headers, body: .init(data: json))
     }
+    //*
     
+    // л.р. 2.5
+    //*
     app.post("compare") { req async throws -> Response in
         struct CompareRequest: Content {
             let count: Int
@@ -486,7 +545,7 @@ func routes(_ app: Application) throws {
                     providerId: response.providerId,
                     success: true
                 )
-                await RequestLogger.shared.log(logEntry)
+                RequestLogger.shared.log(logEntry)
                 
                 syncResults.append([
                     "index": i,
@@ -505,6 +564,12 @@ func routes(_ app: Application) throws {
             
             do {
                 let taskId = try await brokerClient.submitTask(operation: operation, value: value)
+                
+                // л.р. 3-4.3
+                publishEventAsync(client: req.client, streamId: taskId, eventType: "TaskCreated", data: [
+                    "taskId": taskId, "operation": operation, "value": String(value)
+                ])
+                
                 let (result, totalTimeMs) = try await brokerClient.getResult(taskId: taskId)
                 asyncTotalTime += totalTimeMs
                 
@@ -520,7 +585,7 @@ func routes(_ app: Application) throws {
                     providerId: result.providerId,
                     success: true
                 )
-                await RequestLogger.shared.log(logEntry)
+                RequestLogger.shared.log(logEntry)
                 
                 asyncResults.append([
                     "index": i,
@@ -550,18 +615,21 @@ func routes(_ app: Application) throws {
         headers.add(name: .contentType, value: "application/json")
         return Response(status: .ok, headers: headers, body: .init(data: json))
     }
+    //*
     
-    app.get("logs") { req async -> [RequestLog] in
-        return await RequestLogger.shared.getLogs()
+    // л.р. 1.4, 2.3
+    app.get("logs") { req -> [RequestLog] in
+        return RequestLogger.shared.getLogs()
     }
     
-    app.delete("logs") { req async -> String in
-        await RequestLogger.shared.clearLogs()
+    app.delete("logs") { req -> String in
+        RequestLogger.shared.clearLogs()
         return "Logs cleared"
     }
     
-    app.get("statistics") { req async -> Response in
-        let stats = await RequestLogger.shared.getStatistics()
+    // л.р. 2.5
+    app.get("statistics") { req -> Response in
+        let stats = RequestLogger.shared.getStatistics()
         let json = try! JSONSerialization.data(withJSONObject: stats, options: .prettyPrinted)
         var headers = HTTPHeaders()
         headers.add(name: .contentType, value: "application/json")

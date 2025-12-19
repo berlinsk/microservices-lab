@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "broker-service",
+    name: "materializer",
     platforms: [
         .macOS(.v13)
     ],
@@ -19,5 +19,3 @@ let package = Package(
         ),
     ]
 )
-
-

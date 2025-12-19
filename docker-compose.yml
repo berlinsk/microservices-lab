@@ -1,4 +1,6 @@
+# л.р. 1-5
 services:
+  # л.р. 2.1
   broker:
     build:
       context: ./broker-service
@@ -9,6 +11,60 @@ services:
     networks:
       - lab-network
 
+  # л.р. 3-4.2
+  event-store:
+    build:
+      context: ./event-store
+      dockerfile: Dockerfile
+    container_name: event-store
+    ports:
+      - "8083:8083"
+    networks:
+      - lab-network
+
+  # л.р. 3-4.4
+  materializer:
+    build:
+      context: ./materializer
+      dockerfile: Dockerfile
+    container_name: materializer
+    ports:
+      - "8085:8085"
+    environment:
+      - EVENT_STORE_URL=http://event-store:8083
+      - STATE_STORE_URL=http://state-store-1:8086
+      - MATERIALIZER_ID=materializer-1
+    depends_on:
+      - event-store
+      - state-store-1
+    networks:
+      - lab-network
+
+  # л.р. 3-4.5
+  state-store-1:
+    build:
+      context: ./state-store
+      dockerfile: Dockerfile
+    container_name: state-store-1
+    environment:
+      - NODE_ID=node-1
+    ports:
+      - "8086:8086"
+    networks:
+      - lab-network
+
+  # л.р. 3-4.5
+  state-store-2:
+    build:
+      context: ./state-store
+      dockerfile: Dockerfile
+    container_name: state-store-2
+    environment:
+      - NODE_ID=node-2
+    networks:
+      - lab-network
+
+  # л.р. 1.5
   nginx:
     image: nginx:alpine
     container_name: load-balancer
@@ -23,6 +79,7 @@ services:
     networks:
       - lab-network
 
+  # л.р. 1.2, 2.4
   provider-1:
     build:
       context: ./provider-service
@@ -31,11 +88,14 @@ services:
     environment:
       - PROVIDER_ID=provider-1
       - BROKER_URL=http://broker:8082
+      - EVENT_STORE_URL=http://event-store:8083
     depends_on:
       - broker
+      - event-store
     networks:
       - lab-network
 
+  # л.р. 2.4
   provider-2:
     build:
       context: ./provider-service
@@ -44,11 +104,14 @@ services:
     environment:
       - PROVIDER_ID=provider-2
       - BROKER_URL=http://broker:8082
+      - EVENT_STORE_URL=http://event-store:8083
     depends_on:
       - broker
+      - event-store
     networks:
       - lab-network
 
+  # л.р. 2.4
   provider-3:
     build:
       context: ./provider-service
@@ -57,11 +120,14 @@ services:
     environment:
       - PROVIDER_ID=provider-3
       - BROKER_URL=http://broker:8082
+      - EVENT_STORE_URL=http://event-store:8083
     depends_on:
       - broker
+      - event-store
     networks:
       - lab-network
 
+  # л.р. 1.1, 3-4.3
   consumer:
     build:
       context: ./consumer-service
@@ -72,8 +138,28 @@ services:
     environment:
       - PROVIDER_URL=http://nginx:80
       - BROKER_URL=http://broker:8082
+      - EVENT_STORE_URL=http://event-store:8083
     depends_on:
       - nginx
+      - broker
+      - event-store
+    networks:
+      - lab-network
+
+  # л.р. 5.1, 5.2
+  process-manager:
+    build:
+      context: ./process-manager
+      dockerfile: Dockerfile
+    container_name: process-manager
+    ports:
+      - "8087:8087"
+    environment:
+      - EVENT_STORE_URL=http://event-store:8083
+      - BROKER_URL=http://broker:8082
+      - PROCESS_MANAGER_ID=pm-1
+    depends_on:
+      - event-store
       - broker
     networks:
       - lab-network

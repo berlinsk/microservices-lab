@@ -20,8 +20,6 @@ COPY --from=build /build/.build/release/App /app/
 WORKDIR /app
 
 USER vapor
-EXPOSE 8082
+EXPOSE 8086
 
 ENTRYPOINT ["./App"]
-
-

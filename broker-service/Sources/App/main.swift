@@ -1,7 +1,8 @@
+// л.р. 2.1
 import Vapor
 import Foundation
 
-struct Task: Content, Codable {
+struct BrokerTask: Content, Codable {
     let id: String
     let operation: String
     let value: Int
@@ -18,140 +19,110 @@ struct TaskResult: Content, Codable {
     let completedAt: String
 }
 
-actor MessageQueue {
+// л.р. 2.1, 2.4
+//*
+final class MessageQueue: @unchecked Sendable {
     static let shared = MessageQueue()
     
-    private var pendingTasks: [Task] = []
+    private var pendingTasks: [BrokerTask] = []
     private var results: [String: TaskResult] = [:]
-    private var stats = BrokerStats()
+    private var processedCount = 0
+    private let lock = NSLock()
     
-    struct BrokerStats {
-        var totalTasksSubmitted: Int = 0
-        var totalTasksCompleted: Int = 0
-        var tasksByProvider: [String: Int] = [:]
-    }
-    
-    func submitTask(_ task: Task) {
+    func submitTask(_ task: BrokerTask) {
+        lock.lock()
+        defer { lock.unlock() }
         pendingTasks.append(task)
-        stats.totalTasksSubmitted += 1
         print("Task submitted: \(task.id) - \(task.operation)(\(task.value))")
     }
     
-    func getNextTask() -> Task? {
+    func getNextTask() -> BrokerTask? {
+        lock.lock()
+        defer { lock.unlock() }
         guard !pendingTasks.isEmpty else { return nil }
-        let task = pendingTasks.removeFirst()
-        print("Task dispatched: \(task.id)")
-        return task
+        return pendingTasks.removeFirst()
     }
     
     func submitResult(_ result: TaskResult) {
+        lock.lock()
+        defer { lock.unlock() }
         results[result.taskId] = result
-        stats.totalTasksCompleted += 1
-        stats.tasksByProvider[result.providerId, default: 0] += 1
-        print("Result received: \(result.taskId) from \(result.providerId)")
+        processedCount += 1
+        print("Result submitted: \(result.taskId) by \(result.providerId)")
     }
     
     func getResult(taskId: String) -> TaskResult? {
-        return results.removeValue(forKey: taskId)
-    }
-    
-    func peekResult(taskId: String) -> TaskResult? {
+        lock.lock()
+        defer { lock.unlock() }
         return results[taskId]
     }
     
     func getStats() -> [String: Any] {
+        lock.lock()
+        defer { lock.unlock() }
         return [
-            "totalTasksSubmitted": stats.totalTasksSubmitted,
-            "totalTasksCompleted": stats.totalTasksCompleted,
             "pendingTasks": pendingTasks.count,
-            "pendingResults": results.count,
-            "tasksByProvider": stats.tasksByProvider
+            "completedTasks": results.count,
+            "totalProcessed": processedCount
         ]
     }
-    
-    func getPendingCount() -> Int {
-        return pendingTasks.count
-    }
 }
+//*
 
 func configure(_ app: Application) throws {
     app.http.server.configuration.hostname = "0.0.0.0"
     app.http.server.configuration.port = 8082
     
-    try routes(app)
-}
-
-func routes(_ app: Application) throws {
-    
     app.get("health") { req -> String in
         return "Broker Service is healthy"
     }
     
-    app.post("tasks") { req async throws -> Response in
-        let task = try req.content.decode(Task.self)
-        await MessageQueue.shared.submitTask(task)
-        return Response(status: .accepted, body: .init(string: "{\"status\":\"accepted\",\"taskId\":\"\(task.id)\"}"))
+    // л.р. 2.1
+    app.post("tasks") { req -> Response in
+        let task = try req.content.decode(BrokerTask.self)
+        MessageQueue.shared.submitTask(task)
+        return Response(status: .accepted)
     }
     
-    app.get("tasks", "next") { req async -> Response in
-        if let task = await MessageQueue.shared.getNextTask() {
+    // л.р. 2.4
+    app.get("tasks", "next") { req -> Response in
+        if let task = MessageQueue.shared.getNextTask() {
             let encoder = JSONEncoder()
             let data = try! encoder.encode(task)
             var headers = HTTPHeaders()
             headers.add(name: .contentType, value: "application/json")
             return Response(status: .ok, headers: headers, body: .init(data: data))
-        } else {
-            return Response(status: .noContent)
         }
+        return Response(status: .noContent)
     }
     
-    app.post("results") { req async throws -> Response in
+    // л.р. 2.1
+    app.post("results") { req -> Response in
         let result = try req.content.decode(TaskResult.self)
-        await MessageQueue.shared.submitResult(result)
-        return Response(status: .accepted, body: .init(string: "{\"status\":\"accepted\"}"))
+        MessageQueue.shared.submitResult(result)
+        return Response(status: .accepted)
     }
     
-    app.get("results", ":taskId") { req async -> Response in
+    app.get("results", ":taskId") { req -> Response in
         guard let taskId = req.parameters.get("taskId") else {
             return Response(status: .badRequest)
         }
-        if let result = await MessageQueue.shared.getResult(taskId: taskId) {
+        if let result = MessageQueue.shared.getResult(taskId: taskId) {
             let encoder = JSONEncoder()
             let data = try! encoder.encode(result)
             var headers = HTTPHeaders()
             headers.add(name: .contentType, value: "application/json")
             return Response(status: .ok, headers: headers, body: .init(data: data))
-        } else {
-            return Response(status: .notFound)
         }
+        return Response(status: .notFound)
     }
     
-    app.get("results", ":taskId", "peek") { req async -> Response in
-        guard let taskId = req.parameters.get("taskId") else {
-            return Response(status: .badRequest)
-        }
-        if let result = await MessageQueue.shared.peekResult(taskId: taskId) {
-            let encoder = JSONEncoder()
-            let data = try! encoder.encode(result)
-            var headers = HTTPHeaders()
-            headers.add(name: .contentType, value: "application/json")
-            return Response(status: .ok, headers: headers, body: .init(data: data))
-        } else {
-            return Response(status: .notFound)
-        }
-    }
-    
-    app.get("stats") { req async -> Response in
-        let stats = await MessageQueue.shared.getStats()
+    app.get("stats") { req -> Response in
+        let stats = MessageQueue.shared.getStats()
         let json = try! JSONSerialization.data(withJSONObject: stats, options: .prettyPrinted)
         var headers = HTTPHeaders()
         headers.add(name: .contentType, value: "application/json")
         return Response(status: .ok, headers: headers, body: .init(data: json))
-    }
-    
-    app.get("pending") { req async -> String in
-        let count = await MessageQueue.shared.getPendingCount()
-        return "\(count)"
     }
 }
 
@@ -163,4 +134,3 @@ try configure(app)
 print("Broker Service started on port 8082")
 
 try await app.execute()
-
