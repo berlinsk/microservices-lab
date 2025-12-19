@@ -2,7 +2,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "consumer-service",
+    name: "broker-service",
     platforms: [
         .macOS(.v13)
     ],
@@ -19,3 +19,4 @@ let package = Package(
         ),
     ]
 )
+

@@ -1,39 +1,66 @@
 services:
+  broker:
+    build:
+      context: ./broker-service
+      dockerfile: Dockerfile
+    container_name: broker
+    ports:
+      - "8082:8082"
+    networks:
+      - lab-network
+
+  nginx:
+    image: nginx:alpine
+    container_name: load-balancer
+    ports:
+      - "8081:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - provider-1
+      - provider-2
+      - provider-3
+    networks:
+      - lab-network
+
   provider-1:
     build:
       context: ./provider-service
       dockerfile: Dockerfile
-    container_name: provider-service-1
-    ports:
-      - "8081:8081"
+    container_name: provider-1
     environment:
-      - LOG_LEVEL=info
+      - PROVIDER_ID=provider-1
+      - BROKER_URL=http://broker:8082
+    depends_on:
+      - broker
     networks:
-      - lab1-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      - lab-network
 
   provider-2:
     build:
       context: ./provider-service
       dockerfile: Dockerfile
-    container_name: provider-service-2
-    ports:
-      - "8082:8081"
+    container_name: provider-2
     environment:
-      - LOG_LEVEL=info
+      - PROVIDER_ID=provider-2
+      - BROKER_URL=http://broker:8082
+    depends_on:
+      - broker
     networks:
-      - lab1-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8081/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      - lab-network
+
+  provider-3:
+    build:
+      context: ./provider-service
+      dockerfile: Dockerfile
+    container_name: provider-3
+    environment:
+      - PROVIDER_ID=provider-3
+      - BROKER_URL=http://broker:8082
+    depends_on:
+      - broker
+    networks:
+      - lab-network
 
   consumer:
     build:
@@ -44,39 +71,13 @@ services:
       - "8080:8080"
     environment:
       - PROVIDER_URL=http://nginx:80
-      - LOG_LEVEL=info
+      - BROKER_URL=http://broker:8082
     depends_on:
-      - provider-1
-      - provider-2
       - nginx
+      - broker
     networks:
-      - lab1-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
-  nginx:
-    image: nginx:alpine
-    container_name: nginx-lb
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - provider-1
-      - provider-2
-    networks:
-      - lab1-network
-    healthcheck:
-      test: ["CMD", "nginx", "-t"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      - lab-network
 
 networks:
-  lab1-network:
+  lab-network:
     driver: bridge
-    name: lab1-distributed-systems

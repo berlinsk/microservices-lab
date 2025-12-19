@@ -6,8 +6,10 @@ services:
     container_name: provider-service
     ports:
       - "8081:8081"
+    environment:
+      - PROVIDER_ID=provider-1
     networks:
-      - lab1-network
+      - lab-network
 
   consumer:
     build:
@@ -21,8 +23,8 @@ services:
     depends_on:
       - provider
     networks:
-      - lab1-network
+      - lab-network
 
 networks:
-  lab1-network:
+  lab-network:
     driver: bridge
